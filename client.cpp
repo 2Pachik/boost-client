@@ -262,9 +262,6 @@ BOOL CALLBACK DlgMain(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 				boost::beast::flat_buffer buffer;
 				boost::beast::http::response<boost::beast::http::dynamic_body> response;
 				boost::beast::http::read(*data->socket.get(), buffer, response);
-
-				//auto cp = response[boost::beast::http::field::content_type];
-
 				auto status = response.result_int();
 
 				if (status == 200) {
@@ -276,82 +273,41 @@ BOOL CALLBACK DlgMain(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 					std::size_t size = 0;
 					size = pt_.get<std::size_t>("Size");
 
-					std::ofstream file(itemText, std::ios::binary);
-					std::size_t packet_size = 4096;
-					std::vector<std::byte> package_buffer(packet_size);
+					if (size > 0) {
+						std::shared_ptr<std::byte[]> fdata(new std::byte[size]);
 
-					for (std::size_t offset = 0; offset < size; offset += packet_size)
-					{
-						std::size_t length = std::min(packet_size, size - offset);
-						data->socket->receive(boost::asio::buffer(package_buffer, length));
-						file.write(reinterpret_cast<const char*>(std::to_address(package_buffer.data())), length);
-					}
+						data->socket.get()->read_some(boost::asio::buffer(fdata.get(), size));
 
-					if (file.good()) {
-						MessageBox(hwnd, fmt.str().c_str(), "Successfully download!", MB_OK);
-					}
-					else {
-						MessageBox(hwnd, "Error writing to file", "Error!", MB_OK);
-					}
+						FILE* file;
 
-					file.close();
+						file = fopen(itemText, "wb");
+
+						fwrite(fdata.get(), 1, size, file);
+
+						fclose(file);
+
+						MessageBox(hwnd, "File writed", "!", MB_OK);
+					}
+				}
+
+				else if (status == 404) {
+					MessageBox(hwnd, "Not found", "Attention", MB_OK);
+				}
+
+				else if (status == 401) {
+					MessageBox(hwnd, "Not authorizate", "Attention", MB_OK);
+					data->socket.get()->close();
+					EndDialog(hwnd, 0);
+					DialogBox(GetModuleHandle(NULL), MAKEINTRESOURCE(IDD_DIALOG1), NULL, (DLGPROC)DlgAuth);
 				}
 
 				else {
-					MessageBox(hwnd, "Not file", "Attention", MB_OK);
+					MessageBox(hwnd, "Bad request", "Attention", MB_OK);
 				}
-
-					/*boost::system::error_code ecRes;
-					boost::beast::flat_buffer buffer;
-					boost::beast::http::response<boost::beast::http::file_body> response;
-					boost::beast::http::read(*data->socket.get(), buffer, response);
-
-					response.body().open(fmt.str().c_str(), boost::beast::file_mode::write_new, ecRes);
-
-					if (!ecRes) {
-						MessageBox(hwnd, fmt.str().c_str(), "File writed!", MB_OK);
-					}
-
-					else {
-						MessageBox(hwnd, ecRes.message().c_str(), "Error!", MB_OK);
-					}*/
-
-					//boost::property_tree::ptree pt_; // pt for getting "Size"
-					//std::istringstream iss_(boost::beast::buffers_to_string(response.body().data()));
-					//boost::property_tree::json_parser::read_json(iss_, pt_);
-					//int size = 0;
-					//size = pt_.get<int>("Size");
-					//if (size != -1) {
-					//	std::string str = pt_.get<std::string>("Data");
-					//	//std::shared_ptr<char[]> fileData(new char[size]);
-					//	//data->socket->receive(boost::asio::buffer(fileData.get(), size));
-					//	TCHAR itemText[256];
-					//	TVITEM item;
-					//	item.hItem = selectedItem;
-					//	item.mask = TVIF_TEXT;
-					//	item.pszText = itemText;
-					//	item.cchTextMax = 256;
-					//	TreeView_GetItem(hTreeView, &item);
-					//	//write_file(size, fileData.get(), itemText);
-					//	write_file(size, str.data(), itemText);
-					//	boost::format fmt("File %1% downloaded");
-					//	fmt% itemText;
-					//	MessageBox(hwnd, fmt.str().c_str(), "Download is complete", MB_OK);
-					//}
-					//else {
-					//	boost::beast::flat_buffer buffer;
-					//	boost::beast::http::response<boost::beast::http::dynamic_body> response;
-					//	boost::beast::http::read(*data->socket, buffer, response);
-					//	int status = response.result_int();
-					//	if (status == 403) {
-					//		MessageBox(hwnd, "File doesn`t exist or you are trying to download a folder", "Attention", MB_OK);
-					//	}
-					//}
-
 			}
 			catch (std::exception& e) {
 
-				MessageBox(hwnd, e.what(), "Attention", MB_OK);
+				MessageBox(hwnd, e.what(), "std::exc", MB_OK);
 				data->socket.get()->close();
 				EndDialog(hwnd, 0);
 				DialogBox(GetModuleHandle(NULL), MAKEINTRESOURCE(IDD_DIALOG1), NULL, (DLGPROC)DlgAuth);
@@ -359,7 +315,7 @@ BOOL CALLBACK DlgMain(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
 			catch (boost::system::system_error& e) {
 
-				MessageBox(hwnd, e.what(), e.code().message().c_str(), MB_OK);
+				MessageBox(hwnd, e.what(), "boost::exc", MB_OK);
 				data->socket.get()->close();
 				EndDialog(hwnd, 0);
 				DialogBox(GetModuleHandle(NULL), MAKEINTRESOURCE(IDD_DIALOG1), NULL, (DLGPROC)DlgAuth);
@@ -504,7 +460,6 @@ BOOL CALLBACK DlgAuth(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 				}
 
 				else {
-
 					MessageBox(hwnd, ec.message().c_str(), "Error", MB_OK);
 				}
 			}
