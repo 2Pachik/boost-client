@@ -7,11 +7,7 @@
 #include <boost/asio.hpp>
 #include <fstream>
 #include <ctime>
-#include <boost/format.hpp>
-#include <boost/bind.hpp>
-#include <boost/beast.hpp>
-#include <boost/config.hpp>
-#include <boost/thread.hpp>
+#include <boost/json.hpp>
 #include <boost/property_tree/json_parser.hpp>
 #include <boost/algorithm/string/replace.hpp>
 #include <memory>
@@ -29,7 +25,6 @@
 #include "usage_headers/hmac.hpp"
 
 struct DialogData {
-
 	std::shared_ptr<boost::asio::ip::tcp::socket> socket;
 	std::string dirs;
 	std::string jwt;
@@ -38,27 +33,34 @@ struct DialogData {
 void filename(std::string str, char* data) {
 
 	str = str.substr(str.find_last_of('\\') + 1, str.length());
+
 	strcpy(data, str.c_str());
 }
 
 void write_file(int size, char* data, char* filename_) {
 
 	FILE* file;
+
 	file = fopen(filename_, "wb");
+
 	fwrite(data, 1, size, file);
+
 	fclose(file);
 }
 
 std::string from_wchar_to_str(WCHAR* wstr, int wstrLen) {
 
 	std::wstring wresult = wstr;
+
 	std::string result(wresult.begin(), wresult.end());
+
 	return result.substr(0, wstrLen);
 }
 
 std::string MD5Encode(std::string data) {
 
 	MD5 md5;
+
 	return md5(data);
 }
 
@@ -90,7 +92,7 @@ std::string getFullPath(HWND hwndTV, HTREEITEM hItem) {
 
 			boost::format fmt("%1%%2%");
 
-			fmt% strTvi % path;
+			fmt% strTvi% path;
 
 			path = fmt.str();
 		}
@@ -104,10 +106,10 @@ std::string getFullPath(HWND hwndTV, HTREEITEM hItem) {
 std::vector<std::string> split(std::string str, char symbol) {
 
 	std::vector<std::string> elems;
-	std::stringstream ss(str);
+	std::istringstream iss(str);
 	std::string item;
 
-	while (std::getline(ss, item, symbol)) {
+	while (std::getline(iss, item, symbol)) {
 
 		elems.push_back(item);
 	}
@@ -164,6 +166,16 @@ void addPathsToTreeView(HWND hwndTV, std::string paths) {
 	}
 }
 
+std::string localPath() {
+	WCHAR filename[MAX_PATH];
+	GetModuleFileNameW(NULL, filename, MAX_PATH);
+	std::wstring wpath = filename;
+	std::string filepath(wpath.begin(), wpath.end());
+	int endP = filepath.find_last_of('\\');
+	filepath = filepath.substr(0, endP);
+	return filepath;
+}
+
 BOOL CALLBACK DlgAuth(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
 BOOL CALLBACK DlgMain(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
@@ -200,11 +212,9 @@ BOOL CALLBACK DlgMain(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 	{
 
 		LPNMHDR lpnmh = (LPNMHDR)lParam;
-
 		if ((lpnmh->code == NM_DBLCLK) && (lpnmh->idFrom == IDC_TREE1))
 		{
 			boost::system::error_code ec;
-
 			DialogData* data = reinterpret_cast<DialogData*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
 
 			try {
@@ -237,86 +247,123 @@ BOOL CALLBACK DlgMain(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 				request.prepare_payload();
 				boost::beast::http::write(*data->socket, request);
 
+				TCHAR itemText[256];
+				TVITEM item;
+				item.hItem = selectedItem;
+				item.mask = TVIF_TEXT;
+				item.pszText = itemText;
+				item.cchTextMax = 256;
+				TreeView_GetItem(hTreeView, &item);
+
+				boost::format fmt("%1%\\%2%");
+				fmt% localPath() % itemText;
+
 				boost::system::error_code ecRes;
 				boost::beast::flat_buffer buffer;
-				boost::beast::http::response_parser<boost::beast::http::file_body> parser;
+				boost::beast::http::response<boost::beast::http::dynamic_body> response;
+				boost::beast::http::read(*data->socket.get(), buffer, response);
 
-				parser.get().body().open("C:\\Files\\Axxon\\Main\\client\\Debug\\1.wav", boost::beast::file_mode::write, ecRes);
-				
-				if (ecRes) {
-					std::cerr << "Failed to open file: " << ecRes.message() << "\n";
-					return 1;
+				//auto cp = response[boost::beast::http::field::content_type];
+
+				auto status = response.result_int();
+
+				if (status == 200) {
+
+					boost::property_tree::ptree pt_; // pt for getting "Size"
+					std::istringstream iss_(boost::beast::buffers_to_string(response.body().data()));
+					boost::property_tree::json_parser::read_json(iss_, pt_);
+
+					std::size_t size = 0;
+					size = pt_.get<std::size_t>("Size");
+
+					std::ofstream file(itemText, std::ios::binary);
+					std::size_t packet_size = 4096;
+					std::vector<std::byte> package_buffer(packet_size);
+
+					for (std::size_t offset = 0; offset < size; offset += packet_size)
+					{
+						std::size_t length = std::min(packet_size, size - offset);
+						data->socket->receive(boost::asio::buffer(package_buffer, length));
+						file.write(reinterpret_cast<const char*>(std::to_address(package_buffer.data())), length);
+					}
+
+					if (file.good()) {
+						MessageBox(hwnd, fmt.str().c_str(), "Successfully download!", MB_OK);
+					}
+					else {
+						MessageBox(hwnd, "Error writing to file", "Error!", MB_OK);
+					}
+
+					file.close();
 				}
 
-				boost::beast::http::read(*data->socket, buffer, parser);
+				else {
+					MessageBox(hwnd, "Not file", "Attention", MB_OK);
+				}
 
-				//boost::property_tree::ptree pt_; // pt for getting "Size"
-				//std::istringstream iss_(boost::beast::buffers_to_string(response.body().data()));
-				//boost::property_tree::json_parser::read_json(iss_, pt_);
+					/*boost::system::error_code ecRes;
+					boost::beast::flat_buffer buffer;
+					boost::beast::http::response<boost::beast::http::file_body> response;
+					boost::beast::http::read(*data->socket.get(), buffer, response);
 
-				//int size = 0;
+					response.body().open(fmt.str().c_str(), boost::beast::file_mode::write_new, ecRes);
 
-				//size = pt_.get<int>("Size");
+					if (!ecRes) {
+						MessageBox(hwnd, fmt.str().c_str(), "File writed!", MB_OK);
+					}
 
-				//if (size != -1) {
+					else {
+						MessageBox(hwnd, ecRes.message().c_str(), "Error!", MB_OK);
+					}*/
 
-				//	std::string str = pt_.get<std::string>("Data");
+					//boost::property_tree::ptree pt_; // pt for getting "Size"
+					//std::istringstream iss_(boost::beast::buffers_to_string(response.body().data()));
+					//boost::property_tree::json_parser::read_json(iss_, pt_);
+					//int size = 0;
+					//size = pt_.get<int>("Size");
+					//if (size != -1) {
+					//	std::string str = pt_.get<std::string>("Data");
+					//	//std::shared_ptr<char[]> fileData(new char[size]);
+					//	//data->socket->receive(boost::asio::buffer(fileData.get(), size));
+					//	TCHAR itemText[256];
+					//	TVITEM item;
+					//	item.hItem = selectedItem;
+					//	item.mask = TVIF_TEXT;
+					//	item.pszText = itemText;
+					//	item.cchTextMax = 256;
+					//	TreeView_GetItem(hTreeView, &item);
+					//	//write_file(size, fileData.get(), itemText);
+					//	write_file(size, str.data(), itemText);
+					//	boost::format fmt("File %1% downloaded");
+					//	fmt% itemText;
+					//	MessageBox(hwnd, fmt.str().c_str(), "Download is complete", MB_OK);
+					//}
+					//else {
+					//	boost::beast::flat_buffer buffer;
+					//	boost::beast::http::response<boost::beast::http::dynamic_body> response;
+					//	boost::beast::http::read(*data->socket, buffer, response);
+					//	int status = response.result_int();
+					//	if (status == 403) {
+					//		MessageBox(hwnd, "File doesn`t exist or you are trying to download a folder", "Attention", MB_OK);
+					//	}
+					//}
 
-				//	//std::shared_ptr<char[]> fileData(new char[size]);
-
-				//	//data->socket->receive(boost::asio::buffer(fileData.get(), size));
-
-				//	TCHAR itemText[256];
-				//	TVITEM item;
-				//	item.hItem = selectedItem;
-				//	item.mask = TVIF_TEXT;
-				//	item.pszText = itemText;
-				//	item.cchTextMax = 256;
-
-				//	TreeView_GetItem(hTreeView, &item);
-
-				//	//write_file(size, fileData.get(), itemText);
-				//	write_file(size, str.data(), itemText);
-
-				//	boost::format fmt("File %1% downloaded");
-				//	fmt% itemText;
-
-				//	MessageBox(hwnd, fmt.str().c_str(), "Download is complete", MB_OK);
-				//}
-
-				//else {
-
-				//	boost::beast::flat_buffer buffer;
-				//	boost::beast::http::response<boost::beast::http::dynamic_body> response;
-
-				//	boost::beast::http::read(*data->socket, buffer, response);
-
-				//	int status = response.result_int();
-
-				//	if (status == 403) {
-
-				//		MessageBox(hwnd, "File doesn`t exist or you are trying to download a folder", "Attention", MB_OK);
-				//	}
-				//}
 			}
-
 			catch (std::exception& e) {
 
 				MessageBox(hwnd, e.what(), "Attention", MB_OK);
-				MessageBox(hwnd, "Server asks to re-login", "Attention", MB_OK);
 				data->socket.get()->close();
 				EndDialog(hwnd, 0);
 				DialogBox(GetModuleHandle(NULL), MAKEINTRESOURCE(IDD_DIALOG1), NULL, (DLGPROC)DlgAuth);
 			}
 
-			/*catch (boost::exception& e) {
+			catch (boost::system::system_error& e) {
 
-				MessageBox(hwnd, boost::diagnostic_information(e).c_str(), "Attention", MB_OK);
-				MessageBox(hwnd, "Server asks to re-login", "Attention", MB_OK);
+				MessageBox(hwnd, e.what(), e.code().message().c_str(), MB_OK);
 				data->socket.get()->close();
 				EndDialog(hwnd, 0);
 				DialogBox(GetModuleHandle(NULL), MAKEINTRESOURCE(IDD_DIALOG1), NULL, (DLGPROC)DlgAuth);
-			}*/
+			}
 
 		}
 	}
@@ -367,7 +414,8 @@ BOOL CALLBACK DlgAuth(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
 				int port_ = stoi(port);
 
-				boost::asio::ip::tcp::endpoint ep(boost::asio::ip::address::from_string(IP), port_);
+				//boost::asio::ip::tcp::endpoint ep(boost::asio::ip::address::from_string(IP), port_);
+				boost::asio::ip::tcp::endpoint ep(boost::asio::ip::address::from_string("192.168.100.14"), 8080);
 
 				socket.get()->connect(ep, ec);
 
@@ -385,8 +433,11 @@ BOOL CALLBACK DlgAuth(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 					GetWindowTextW(loginField, wlogin, loginFieldLen);
 					GetWindowTextW(passwordField, wpassword, passwordFieldLen);
 
-					std::string login = from_wchar_to_str(wlogin, loginFieldLen);
-					std::string password = from_wchar_to_str(wpassword, passwordFieldLen);
+					/*std::string login = from_wchar_to_str(wlogin, loginFieldLen);
+					std::string password = from_wchar_to_str(wpassword, passwordFieldLen);*/
+
+					std::string login = "Admin";
+					std::string password = "12345";
 
 					boost::format fmtAuth("%1%|%2%");
 
@@ -431,7 +482,7 @@ BOOL CALLBACK DlgAuth(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
 					std::string jsonDirs = boost::beast::buffers_to_string(response_.body().data());
 
-					boost::replace_all(jsonDirs, "\\", "\\\\");
+					//boost::replace_all(jsonDirs, "\\", "\\\\");
 
 					std::istringstream iss_(jsonDirs.data());
 

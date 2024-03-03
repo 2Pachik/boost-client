@@ -18,7 +18,7 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="main.cpp">
+    <ClCompile Include="client.cpp">
       <Filter>Cpp</Filter>
     </ClCompile>
     <ClCompile Include="usage_headers\md5.cpp">
