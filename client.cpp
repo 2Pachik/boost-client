@@ -224,10 +224,8 @@ BOOL CALLBACK DlgMain(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 				HTREEITEM selectedItem = TreeView_GetSelection(hTreeView);
 
 				std::string path = getFullPath(hTreeView, selectedItem);
-
-				std::string str = data->jwt;
-
-				std::istringstream iss(str);
+				std::string strJWT = data->jwt;
+				std::istringstream iss(strJWT);
 
 				boost::property_tree::ptree pt;
 				boost::property_tree::json_parser::read_json(iss, pt);
@@ -258,51 +256,14 @@ BOOL CALLBACK DlgMain(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 				boost::format fmt("%1%\\%2%");
 				fmt% localPath() % itemText;
 
-				boost::system::error_code ecRes;
 				boost::beast::flat_buffer buffer;
-				boost::beast::http::response<boost::beast::http::dynamic_body> response;
-				boost::beast::http::read(*data->socket.get(), buffer, response);
-				auto status = response.result_int();
+				boost::beast::http::response_parser<boost::beast::http::file_body> response;
+				response.body_limit((std::numeric_limits<std::uint64_t>::max)());
+				response.get().body().open(fmt.str().c_str(), boost::beast::file_mode::write_new, ec);
+				boost::beast::http::read(*data->socket.get(), buffer, response, ec);
 
-				if (status == 200) {
-
-					boost::property_tree::ptree pt_; // pt for getting "Size"
-					std::istringstream iss_(boost::beast::buffers_to_string(response.body().data()));
-					boost::property_tree::json_parser::read_json(iss_, pt_);
-
-					std::size_t size = 0;
-					size = pt_.get<std::size_t>("Size");
-
-					if (size > 0) {
-						std::shared_ptr<std::byte[]> fdata(new std::byte[size]);
-
-						data->socket.get()->read_some(boost::asio::buffer(fdata.get(), size));
-
-						FILE* file;
-
-						file = fopen(itemText, "wb");
-
-						fwrite(fdata.get(), 1, size, file);
-
-						fclose(file);
-
-						MessageBox(hwnd, "File writed", "!", MB_OK);
-					}
-				}
-
-				else if (status == 404) {
-					MessageBox(hwnd, "Not found", "Attention", MB_OK);
-				}
-
-				else if (status == 401) {
-					MessageBox(hwnd, "Not authorizate", "Attention", MB_OK);
-					data->socket.get()->close();
-					EndDialog(hwnd, 0);
-					DialogBox(GetModuleHandle(NULL), MAKEINTRESOURCE(IDD_DIALOG1), NULL, (DLGPROC)DlgAuth);
-				}
-
-				else {
-					MessageBox(hwnd, "Bad request", "Attention", MB_OK);
+				if (ec) {
+					MessageBox(hwnd, ec.message().c_str(), ec.message().c_str(), MB_OK);
 				}
 			}
 			catch (std::exception& e) {
