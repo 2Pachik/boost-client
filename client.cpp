@@ -256,11 +256,14 @@ BOOL CALLBACK DlgMain(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 				boost::format fmt("%1%\\%2%");
 				fmt% localPath() % itemText;
 
-				boost::beast::flat_buffer buffer;
-				boost::beast::http::response_parser<boost::beast::http::file_body> response;
+				boost::beast::multi_buffer buffer;
+				boost::beast::http::response_parser<boost::beast::http::dynamic_body> response;
 				response.body_limit((std::numeric_limits<std::uint64_t>::max)());
-				response.get().body().open(fmt.str().c_str(), boost::beast::file_mode::write_new, ec);
 				boost::beast::http::read(*data->socket.get(), buffer, response, ec);
+
+				std::ofstream outFile(itemText, std::ios::binary);
+				outFile.write(boost::beast::buffers_to_string(response.get().body().data()).c_str(), response.get().body().size());
+				outFile.close();
 
 				if (ec) {
 					MessageBox(hwnd, ec.message().c_str(), ec.message().c_str(), MB_OK);
