@@ -20,6 +20,7 @@
 #include <locale>
 #include <codecvt>
 #include <vector>
+#include <boost\thread.hpp>
 #include "usage_headers/base64.h"
 #include "usage_headers/md5.h"
 #include "usage_headers/hmac.hpp"
@@ -214,6 +215,8 @@ BOOL CALLBACK DlgMain(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 		LPNMHDR lpnmh = (LPNMHDR)lParam;
 		if ((lpnmh->code == NM_DBLCLK) && (lpnmh->idFrom == IDC_TREE1))
 		{
+			EnableWindow(hwnd, false);
+
 			boost::system::error_code ec;
 			DialogData* data = reinterpret_cast<DialogData*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
 
@@ -258,19 +261,41 @@ BOOL CALLBACK DlgMain(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
 				boost::beast::multi_buffer buffer;
 				boost::beast::http::response_parser<boost::beast::http::dynamic_body> response;
-				response.body_limit((std::numeric_limits<std::uint64_t>::max)());
+				response.body_limit(boost::none);
 				boost::beast::http::read(*data->socket.get(), buffer, response, ec);
 
-				std::ofstream outFile(itemText, std::ios::binary);
-				outFile.write(boost::beast::buffers_to_string(response.get().body().data()).c_str(), response.get().body().size());
-				outFile.close();
-
-				if (ec) {
-					MessageBox(hwnd, ec.message().c_str(), ec.message().c_str(), MB_OK);
+				if (!ec) {
+					if (response.get().result_int() == 200) {
+						boost::beast::error_code ec;
+						auto& body = response.get().body();
+						boost::beast::file file;
+						file.open(itemText, boost::beast::file_mode::write_new, ec);
+						for (auto const& buffer : body.data())
+						{
+							file.write(buffer.data(), buffer.size(), ec);
+						}
+						EnableWindow(hwnd, true);
+						MessageBox(hwnd, "File downloaded!", "Download status", MB_OK);
+					}
+					else if (response.get().result_int() == 401) {
+						EnableWindow(hwnd, true);
+						MessageBox(hwnd, "Token lifetime is over!", "Authentication error", MB_OK);
+						data->socket.get()->close();
+						EndDialog(hwnd, 0);
+						DialogBox(GetModuleHandle(NULL), MAKEINTRESOURCE(IDD_DIALOG1), NULL, (DLGPROC)DlgAuth);
+					}
+					else if (response.get().result_int() == 404) {
+						EnableWindow(hwnd, true);
+						MessageBox(hwnd, "Filed to download file. Maybe you trying to download a folder. Try again!", "Download status", MB_OK);
+					}
+					else {
+						EnableWindow(hwnd, true);
+						MessageBox(hwnd, "Server can`t process the request. Try again", "Undefined request", MB_OK);
+					}
 				}
 			}
 			catch (std::exception& e) {
-
+				EnableWindow(hwnd, true);
 				MessageBox(hwnd, e.what(), "std::exc", MB_OK);
 				data->socket.get()->close();
 				EndDialog(hwnd, 0);
@@ -278,7 +303,7 @@ BOOL CALLBACK DlgMain(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 			}
 
 			catch (boost::system::system_error& e) {
-
+				EnableWindow(hwnd, true);
 				MessageBox(hwnd, e.what(), "boost::exc", MB_OK);
 				data->socket.get()->close();
 				EndDialog(hwnd, 0);
@@ -335,7 +360,7 @@ BOOL CALLBACK DlgAuth(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 				int port_ = stoi(port);
 
 				//boost::asio::ip::tcp::endpoint ep(boost::asio::ip::address::from_string(IP), port_);
-				boost::asio::ip::tcp::endpoint ep(boost::asio::ip::address::from_string("192.168.100.14"), 8080);
+				boost::asio::ip::tcp::endpoint ep(boost::asio::ip::address::from_string("192.168.100.15"), 8080);
 
 				socket.get()->connect(ep, ec);
 
@@ -401,8 +426,6 @@ BOOL CALLBACK DlgAuth(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 					boost::beast::http::read(*socket.get(), buffer_, response_);
 
 					std::string jsonDirs = boost::beast::buffers_to_string(response_.body().data());
-
-					//boost::replace_all(jsonDirs, "\\", "\\\\");
 
 					std::istringstream iss_(jsonDirs.data());
 
